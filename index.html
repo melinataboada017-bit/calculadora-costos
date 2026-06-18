@@ -6,6 +6,7 @@
 <title>Calculadora de Costos · Repostería</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600;9..144,700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <style>
   :root{
     --paper:#FBF1E4;
@@ -464,7 +465,7 @@
     </div>
 
     <div class="sidebar-footer">
-      <button class="btn btn-sm" id="btnExportCSV" style="width:100%;justify-content:center;margin-bottom:10px;">⬇ Exportar todas las recetas (CSV)</button>
+      <button class="btn btn-sm" id="btnExportCSV" style="width:100%;justify-content:center;margin-bottom:10px;">⬇ Exportar todas las recetas (Excel)</button>
       Tus datos se guardan solo en este navegador, en este dispositivo. Nadie más los ve.
     </div>
   </aside>
@@ -483,7 +484,7 @@
       </div>
       <div id="recetasGrid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:16px;"></div>
       <div style="margin-top:20px;">
-        <button class="btn btn-sm btn-full" id="btnExportCSVMobile" style="display:none;">⬇ Exportar todas las recetas (CSV)</button>
+        <button class="btn btn-sm btn-full" id="btnExportCSVMobile" style="display:none;">⬇ Exportar todas las recetas (Excel)</button>
       </div>
     </section>
 
@@ -1137,90 +1138,169 @@
     );
   });
 
-  /* ---- EXPORTAR CSV ---- */
-  function exportCSV(){
+  /* ---- EXPORTAR XLSX ---- */
+  function exportXLSX(){
     if(!state.recetas.length){ showToast('No tenés recetas para exportar todavía.'); return; }
+    if(typeof XLSX === 'undefined'){ showToast('Cargando exportador, intentá de nuevo en un segundo...'); return; }
 
-    var BOM = '\uFEFF'; // para que Excel reconozca UTF-8
-    var rows = [];
+    var wb = XLSX.utils.book_new();
 
-    // ---- Hoja 1: Resumen de recetas ----
-    rows.push(['RESUMEN DE RECETAS']);
-    rows.push(['Receta','Porciones','Tiempo (min)','Margen (%)','Materia Prima','Mano de Obra','Costos Fijos','Costo Total','Precio Total','Precio por Porción']);
-    state.recetas.forEach(function(r){
-      var c = calcReceta(r);
-      rows.push([
-        r.nombre, r.rendimiento, r.tiempoMin, Math.round(r.margen*100),
-        Math.round(c.mp), Math.round(c.mo), Math.round(c.fij),
-        Math.round(c.tot), Math.round(c.pt), Math.round(c.pp)
-      ]);
+    // Paleta
+    var COL_HEADER_BG = 'C76F4D';  // terracota
+    var COL_HEADER_FG = 'FFFFFF';
+    var COL_TITLE_BG  = '4A352A';  // ink oscuro
+    var COL_TITLE_FG  = 'FBF1E4';  // crema
+    var COL_TOTAL_BG  = 'FFF8EC';  // cream-card
+    var COL_ALT_BG    = 'FBF1E4';  // paper
+    var COL_MONEY     = '7C8A5E';  // sage para valores $
+    var COL_BORDER    = 'E6D7C2';
+
+    var fmt_money = '"$"#,##0';
+    var fmt_pct   = '0"%"';
+
+    function styleTitle(){ return {font:{bold:true,color:{rgb:COL_TITLE_FG},sz:13},fill:{fgColor:{rgb:COL_TITLE_BG}},alignment:{horizontal:'left',vertical:'center'},border:borderAll(COL_BORDER)}; }
+    function styleHeader(){ return {font:{bold:true,color:{rgb:COL_HEADER_FG},sz:11},fill:{fgColor:{rgb:COL_HEADER_BG}},alignment:{horizontal:'center',vertical:'center',wrapText:true},border:borderAll(COL_BORDER)}; }
+    function styleData(alt){ return {font:{sz:11},fill:{fgColor:{rgb:alt?COL_ALT_BG:'FFFFFF'}},alignment:{vertical:'center'},border:borderAll(COL_BORDER)}; }
+    function styleMoney(alt){ return {font:{sz:11,color:{rgb:'3D2B1F'}},fill:{fgColor:{rgb:alt?COL_ALT_BG:'FFFFFF'}},numFmt:fmt_money,alignment:{horizontal:'right',vertical:'center'},border:borderAll(COL_BORDER)}; }
+    function styleTotal(){ return {font:{bold:true,sz:12,color:{rgb:COL_TITLE_BG}},fill:{fgColor:{rgb:COL_TOTAL_BG}},numFmt:fmt_money,alignment:{horizontal:'right',vertical:'center'},border:borderAll(COL_BORDER)}; }
+    function styleTotalLabel(){ return {font:{bold:true,sz:12,color:{rgb:COL_TITLE_BG}},fill:{fgColor:{rgb:COL_TOTAL_BG}},alignment:{vertical:'center'},border:borderAll(COL_BORDER)}; }
+    function stylePct(alt){ return {font:{sz:11},fill:{fgColor:{rgb:alt?COL_ALT_BG:'FFFFFF'}},numFmt:fmt_pct,alignment:{horizontal:'center',vertical:'center'},border:borderAll(COL_BORDER)}; }
+    function borderAll(rgb){ var s={style:'thin',color:{rgb:rgb}}; return {top:s,bottom:s,left:s,right:s}; }
+
+    function cell(v, s){ return {v:v, s:s, t: typeof v==='number'?'n':'s'}; }
+
+    /* ========== HOJA 1: RESUMEN ========== */
+    var ws1 = {};
+    var r = 0;
+
+    // Título
+    ws1[XLSX.utils.encode_cell({r:r,c:0})] = cell('RESUMEN DE RECETAS', styleTitle());
+    for(var ci=1;ci<10;ci++) ws1[XLSX.utils.encode_cell({r:r,c:ci})] = {v:'',s:styleTitle()};
+    ws1['!merges'] = [{s:{r:r,c:0},e:{r:r,c:9}}];
+    r++;
+
+    // Subtítulo fecha
+    var fechaStr = new Date().toLocaleDateString('es-AR',{day:'2-digit',month:'long',year:'numeric'});
+    ws1[XLSX.utils.encode_cell({r:r,c:0})] = {v:'Exportado el '+fechaStr, s:{font:{italic:true,sz:10,color:{rgb:'8C7563'}},alignment:{horizontal:'left'}}};
+    r++; r++;
+
+    // Encabezados
+    var h1 = ['Receta','Porciones','Tiempo (min)','Margen','Mat. Prima','Mano de Obra','Costos Fijos','Costo Total','Precio Total','Precio / Porción'];
+    h1.forEach(function(h,i){ ws1[XLSX.utils.encode_cell({r:r,c:i})] = cell(h, styleHeader()); });
+    r++;
+
+    // Datos
+    state.recetas.forEach(function(rec, idx){
+      var c = calcReceta(rec);
+      var alt = idx%2===0;
+      ws1[XLSX.utils.encode_cell({r:r,c:0})] = cell(rec.nombre, Object.assign(styleData(alt),{font:{bold:true,sz:11}}));
+      ws1[XLSX.utils.encode_cell({r:r,c:1})] = cell(rec.rendimiento, Object.assign(styleData(alt),{alignment:{horizontal:'center',vertical:'center'}}));
+      ws1[XLSX.utils.encode_cell({r:r,c:2})] = cell(rec.tiempoMin, Object.assign(styleData(alt),{alignment:{horizontal:'center',vertical:'center'}}));
+      ws1[XLSX.utils.encode_cell({r:r,c:3})] = cell(Math.round(rec.margen*100), stylePct(alt));
+      ws1[XLSX.utils.encode_cell({r:r,c:4})] = cell(Math.round(c.mp), styleMoney(alt));
+      ws1[XLSX.utils.encode_cell({r:r,c:5})] = cell(Math.round(c.mo), styleMoney(alt));
+      ws1[XLSX.utils.encode_cell({r:r,c:6})] = cell(Math.round(c.fij), styleMoney(alt));
+      ws1[XLSX.utils.encode_cell({r:r,c:7})] = cell(Math.round(c.tot), styleMoney(alt));
+      ws1[XLSX.utils.encode_cell({r:r,c:8})] = cell(Math.round(c.pt), Object.assign(styleTotal(),{font:{bold:true,sz:12,color:{rgb:'A8512F'}}}));
+      ws1[XLSX.utils.encode_cell({r:r,c:9})] = cell(Math.round(c.pp), Object.assign(styleTotal(),{font:{bold:true,sz:12,color:{rgb:'5C6845'}}}));
+      r++;
     });
 
-    rows.push([]); // separador
-    rows.push([]);
+    ws1['!ref'] = XLSX.utils.encode_range({s:{r:0,c:0},e:{r:r,c:9}});
+    ws1['!cols'] = [{wch:28},{wch:10},{wch:12},{wch:9},{wch:14},{wch:14},{wch:14},{wch:14},{wch:15},{wch:15}];
+    ws1['!rows'] = [{hpt:28},{hpt:16}]; // título y subtítulo
+    XLSX.utils.book_append_sheet(wb, ws1, 'Resumen');
 
-    // ---- Hoja 2: Detalle de ingredientes por receta ----
-    rows.push(['DETALLE DE INGREDIENTES POR RECETA']);
-    rows.push(['Receta','Ingrediente','Cantidad','Unidad','Costo Unitario','Costo Total Ingrediente']);
-    state.recetas.forEach(function(r){
-      if(!r.ingredientes.length){
-        rows.push([r.nombre,'(sin ingredientes)','','','','']);
+    /* ========== HOJA 2: INGREDIENTES ========== */
+    var ws2 = {};
+    r = 0;
+
+    ws2[XLSX.utils.encode_cell({r:r,c:0})] = cell('DETALLE DE INGREDIENTES POR RECETA', styleTitle());
+    for(var ci2=1;ci2<6;ci2++) ws2[XLSX.utils.encode_cell({r:r,c:ci2})] = {v:'',s:styleTitle()};
+    ws2['!merges'] = [{s:{r:r,c:0},e:{r:r,c:5}}];
+    r++; r++;
+
+    var h2 = ['Receta','Ingrediente','Cantidad','Unidad','Costo Unitario','Costo Total'];
+    h2.forEach(function(h,i){ ws2[XLSX.utils.encode_cell({r:r,c:i})] = cell(h, styleHeader()); });
+    r++;
+
+    state.recetas.forEach(function(rec){
+      var c = calcReceta(rec);
+      if(!rec.ingredientes.length){
+        ws2[XLSX.utils.encode_cell({r:r,c:0})] = cell(rec.nombre, styleData(false));
+        ws2[XLSX.utils.encode_cell({r:r,c:1})] = cell('(sin ingredientes)', Object.assign(styleData(false),{font:{italic:true,sz:11,color:{rgb:'8C7563'}}}));
+        for(var ci3=2;ci3<6;ci3++) ws2[XLSX.utils.encode_cell({r:r,c:ci3})] = {v:'',s:styleData(false)};
+        r++;
       } else {
-        r.ingredientes.forEach(function(ing){
+        rec.ingredientes.forEach(function(ing, idx){
           var cu = ing.insumoId ? insUnitCost(ing.insumoId) : 0;
           var ins = state.insumos.find(function(i){ return i.id===ing.insumoId; });
-          rows.push([
-            r.nombre,
-            ins ? ins.nombre : '(insumo no vinculado)',
-            ing.cantidad,
-            ing.unidad,
-            Math.round(cu*100)/100,
-            Math.round((Number(ing.cantidad)||0)*cu)
-          ]);
+          var alt = idx%2===0;
+          ws2[XLSX.utils.encode_cell({r:r,c:0})] = cell(idx===0?rec.nombre:'', idx===0?Object.assign(styleData(alt),{font:{bold:true,sz:11}}):styleData(alt));
+          ws2[XLSX.utils.encode_cell({r:r,c:1})] = cell(ins?ins.nombre:'(no vinculado)', styleData(alt));
+          ws2[XLSX.utils.encode_cell({r:r,c:2})] = cell(ing.cantidad, Object.assign(styleData(alt),{alignment:{horizontal:'right',vertical:'center'}}));
+          ws2[XLSX.utils.encode_cell({r:r,c:3})] = cell(ing.unidad||'', Object.assign(styleData(alt),{alignment:{horizontal:'center',vertical:'center'}}));
+          ws2[XLSX.utils.encode_cell({r:r,c:4})] = cell(Math.round(cu*100)/100, styleMoney(alt));
+          ws2[XLSX.utils.encode_cell({r:r,c:5})] = cell(Math.round((Number(ing.cantidad)||0)*cu), styleMoney(alt));
+          r++;
         });
+        // Subtotal por receta
+        var c2 = calcReceta(rec);
+        ws2[XLSX.utils.encode_cell({r:r,c:0})] = {v:'',s:styleTotalLabel()};
+        ws2[XLSX.utils.encode_cell({r:r,c:1})] = {v:'',s:styleTotalLabel()};
+        ws2[XLSX.utils.encode_cell({r:r,c:2})] = {v:'',s:styleTotalLabel()};
+        ws2[XLSX.utils.encode_cell({r:r,c:3})] = {v:'',s:styleTotalLabel()};
+        ws2[XLSX.utils.encode_cell({r:r,c:4})] = cell('Total materia prima →', styleTotalLabel());
+        ws2[XLSX.utils.encode_cell({r:r,c:5})] = cell(Math.round(c2.mp), styleTotal());
+        r++;
       }
     });
 
-    rows.push([]);
-    rows.push([]);
+    ws2['!ref'] = XLSX.utils.encode_range({s:{r:0,c:0},e:{r:r,c:5}});
+    ws2['!cols'] = [{wch:28},{wch:30},{wch:12},{wch:9},{wch:16},{wch:18}];
+    XLSX.utils.book_append_sheet(wb, ws2, 'Ingredientes');
 
-    // ---- Hoja 3: Configuración usada ----
-    rows.push(['CONFIGURACIÓN']);
-    rows.push(['Valor hora de trabajo (ARS)', state.config.valorHora]);
-    rows.push(['Horas productivas por mes', state.config.horasMes]);
-    rows.push([]);
-    rows.push(['COSTOS FIJOS MENSUALES']);
-    rows.push(['Concepto','Monto (ARS)']);
-    state.costosFijos.forEach(function(c){ rows.push([c.concepto, c.monto]); });
-    rows.push(['TOTAL COSTOS FIJOS', Math.round(totalFixed())]);
+    /* ========== HOJA 3: CONFIGURACIÓN ========== */
+    var ws3 = {};
+    r = 0;
 
-    // Convertir a CSV
-    var csv = BOM + rows.map(function(row){
-      return row.map(function(cell){
-        var s = String(cell==null?'':cell);
-        // Si tiene comas, comillas o saltos, entrecomillar
-        if(s.indexOf(',')>-1 || s.indexOf('"')>-1 || s.indexOf('\n')>-1){
-          s = '"' + s.replace(/"/g,'""') + '"';
-        }
-        return s;
-      }).join(',');
-    }).join('\r\n');
+    ws3[XLSX.utils.encode_cell({r:r,c:0})] = cell('CONFIGURACIÓN Y COSTOS FIJOS', styleTitle());
+    ws3[XLSX.utils.encode_cell({r:r,c:1})] = {v:'',s:styleTitle()};
+    ws3['!merges'] = [{s:{r:r,c:0},e:{r:r,c:1}}];
+    r++; r++;
 
-    var blob = new Blob([csv], {type:'text/csv;charset=utf-8;'});
-    var url = URL.createObjectURL(blob);
-    var a = document.createElement('a');
-    var fecha = new Date().toLocaleDateString('es-AR').replace(/\//g,'-');
-    a.href = url;
-    a.download = 'recetas-costos-' + fecha + '.csv';
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    URL.revokeObjectURL(url);
-    showToast('¡Archivo descargado! Abrilo con Excel.');
+    ws3[XLSX.utils.encode_cell({r:r,c:0})] = cell('Valor de la hora de trabajo', styleData(false));
+    ws3[XLSX.utils.encode_cell({r:r,c:1})] = cell(state.config.valorHora, styleMoney(false));
+    r++;
+    ws3[XLSX.utils.encode_cell({r:r,c:0})] = cell('Horas productivas por mes', styleData(true));
+    ws3[XLSX.utils.encode_cell({r:r,c:1})] = cell(state.config.horasMes, Object.assign(styleData(true),{alignment:{horizontal:'right',vertical:'center'}}));
+    r++; r++;
+
+    ws3[XLSX.utils.encode_cell({r:r,c:0})] = cell('Concepto', styleHeader());
+    ws3[XLSX.utils.encode_cell({r:r,c:1})] = cell('Monto mensual (ARS)', styleHeader());
+    r++;
+
+    state.costosFijos.forEach(function(cf,idx){
+      ws3[XLSX.utils.encode_cell({r:r,c:0})] = cell(cf.concepto, styleData(idx%2===0));
+      ws3[XLSX.utils.encode_cell({r:r,c:1})] = cell(cf.monto, styleMoney(idx%2===0));
+      r++;
+    });
+
+    ws3[XLSX.utils.encode_cell({r:r,c:0})] = cell('TOTAL COSTOS FIJOS', styleTotalLabel());
+    ws3[XLSX.utils.encode_cell({r:r,c:1})] = cell(Math.round(totalFixed()), styleTotal());
+
+    ws3['!ref'] = XLSX.utils.encode_range({s:{r:0,c:0},e:{r:r,c:1}});
+    ws3['!cols'] = [{wch:38},{wch:22}];
+    XLSX.utils.book_append_sheet(wb, ws3, 'Configuración');
+
+    // Descargar
+    var fecha2 = new Date().toLocaleDateString('es-AR').replace(/\//g,'-');
+    XLSX.writeFile(wb, 'recetas-costos-'+fecha2+'.xlsx');
+    showToast('¡Excel descargado con formato!');
   }
 
-  document.getElementById('btnExportCSV').addEventListener('click', exportCSV);
-  document.getElementById('btnExportCSVMobile').addEventListener('click', exportCSV);
+  document.getElementById('btnExportCSV').addEventListener('click', exportXLSX);
+  document.getElementById('btnExportCSVMobile').addEventListener('click', exportXLSX);
 
   // Mostrar botón mobile solo en pantallas chicas
   function toggleMobileExport(){
